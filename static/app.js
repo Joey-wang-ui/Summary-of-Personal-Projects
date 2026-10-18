@@ -121,10 +121,37 @@ $("#project-form").addEventListener("submit",async event=>{
 $("#read-metadata").addEventListener("click",async()=>{const form=$("#project-form"),button=$("#read-metadata");button.disabled=true;try{const result=await api("/api/preview","POST",{url:form.elements.url.value});form.elements.url.value=result.url;if(result.metadata_loaded){form.elements.name.value=result.name;form.elements.description.value=result.description;if(result.cover_url){form.elements.cover_url.value=result.cover_url;$("#cover-link").value=result.cover_url;updateCover();}notify("网站信息已读取，保存后更新卡片");}else{if(!form.elements.name.value)form.elements.name.value=result.name;notify(standalone?"网址已识别。免安装版可自行填写标题并上传项目截图。":"网站暂未提供可读取的信息，可以手动填写并保存。");}}catch(e){$("#editor-error").textContent=e.message;}finally{button.disabled=false;}});
 $("#cover-link").addEventListener("change",()=>{$("#project-form").elements.cover_url.value=$("#cover-link").value;updateCover();});
 $("#upload-cover").addEventListener("click",()=>$("#cover-file").click());$("#clear-cover").addEventListener("click",()=>{$("#project-form").elements.cover_url.value="";$("#cover-link").value="";updateCover();});
+async function prepareCover(file){
+  if(file.size>10*1024*1024)throw new Error("请选择 10 MB 以内的 PNG、JPEG 或 WebP 图片。");
+  // Read the actual format: some devices leave the MIME type empty for valid PNG files.
+  const header=new Uint8Array(await file.slice(0,12).arrayBuffer());
+  const png=[137,80,78,71,13,10,26,10].every((value,index)=>header[index]===value);
+  const jpeg=header[0]===255&&header[1]===216&&header[2]===255;
+  const webp=String.fromCharCode(...header.slice(0,4))==="RIFF"&&String.fromCharCode(...header.slice(8,12))==="WEBP";
+  if(!png&&!jpeg&&!webp)throw new Error("请选择有效的 PNG、JPEG 或 WebP 图片。");
+  const type=png?"image/png":jpeg?"image/jpeg":"image/webp";
+  let bitmap;
+  try{bitmap=await createImageBitmap(new Blob([file],{type}));}
+  catch{throw new Error("图片无法读取，请重新导出 PNG 图片后再试。");}
+  try{
+    const canvas=document.createElement("canvas");
+    let scale=Math.min(1,960/bitmap.width,960/bitmap.height),data;
+    do{
+      canvas.width=Math.max(1,Math.round(bitmap.width*scale));
+      canvas.height=Math.max(1,Math.round(bitmap.height*scale));
+      canvas.getContext("2d").drawImage(bitmap,0,0,canvas.width,canvas.height);
+      // Keep PNG lossless with its transparent background, including after resizing.
+      data=png?canvas.toDataURL("image/png"):canvas.toDataURL("image/webp",.82);
+      if(data.length<=700000)break;
+      scale*=.8;
+    }while(Math.max(canvas.width,canvas.height)>160);
+    if(!data.startsWith("data:image/")||data.length>700000)throw new Error("图片仍然过大，请选用较小的截图。");
+    return {data,png};
+  }finally{bitmap.close();}
+}
 $("#cover-file").addEventListener("change",async event=>{const file=event.target.files[0];if(!file)return;try{
-  if(!["image/png","image/jpeg","image/webp"].includes(file.type)||file.size>10*1024*1024)throw new Error("请选择 10 MB 以内的 PNG、JPEG 或 WebP 图片。");
-  const bitmap=await createImageBitmap(file);const scale=Math.min(1,960/bitmap.width,960/bitmap.height),canvas=document.createElement("canvas");canvas.width=Math.max(1,Math.round(bitmap.width*scale));canvas.height=Math.max(1,Math.round(bitmap.height*scale));canvas.getContext("2d").drawImage(bitmap,0,0,canvas.width,canvas.height);bitmap.close();
-  let data=canvas.toDataURL("image/webp",.82);if(data.length>700000)data=canvas.toDataURL("image/jpeg",.6);if(data.length>700000)throw new Error("图片仍然过大，请选用较小的截图。");$("#project-form").elements.cover_url.value=data;$("#cover-link").value="";updateCover();notify("封面已选好，保存卡片后生效");
+  $("#editor-error").textContent="";
+  const {data,png}=await prepareCover(file);$("#project-form").elements.cover_url.value=data;$("#cover-link").value="";updateCover();notify(png?"PNG 封面已选好，点击“保存卡片”后生效":"封面已选好，保存卡片后生效");
 }catch(e){$("#editor-error").textContent=e.message;}finally{event.target.value="";}});
 $("#detail-edit").addEventListener("click",()=>{$("#details").close();openEditor(projects.find(p=>p.id===currentId));});
 $("#detail-delete").addEventListener("click",async()=>{const p=projects.find(p=>p.id===currentId);if(!p||!confirm(`确定删除「${p.name}」的卡片记录？`))return;try{await api(`/api/projects/${p.id}`,"DELETE");$("#details").close();await refresh();notify("卡片记录已删除");}catch(e){notify(e.message);}});
